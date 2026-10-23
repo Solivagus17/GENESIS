@@ -1,0 +1,28 @@
+# Datasets & Downloads (Must not be pushed to GitHub)
+data/
+*.tgz
+*.tar.gz
+*.zip
+
+# PyTorch checkpoints and training artifacts
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+runs/
+logs/
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
