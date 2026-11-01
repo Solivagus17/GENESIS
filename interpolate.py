@@ -67,6 +67,8 @@ def generate_morph_gif(
     diffusion: GaussianDiffusion,
     frames: int = 30,
     ddim_steps: int = 50,
+    hold_frames: int = 20,
+    loop: int = 0,
     save_path: str = "car_morph.gif",
     device: torch.device = None
 ):
@@ -76,32 +78,98 @@ def generate_morph_gif(
     z1 = torch.randn(1, 3, 64, 64, device=device)
 
     alphas = torch.linspace(0.0, 1.0, frames)
-    # Loop back smoothly
-    alphas = torch.cat([alphas, torch.linspace(1.0, 0.0, frames)])
 
-    pil_frames = []
+    morph_frames = []
     print(f"Generating {len(alphas)} morph frames using DDIM ({ddim_steps} steps)...")
     for alpha in tqdm(alphas, desc="Interpolating"):
         z_interp = slerp(z0, z1, alpha.item())
         img_tensor = ddim_sample_from_latent(model, diffusion, z_interp, ddim_steps=ddim_steps, device=device)
-        pil_img = to_pil_image(img_tensor.squeeze(0).cpu())
-        pil_frames.append(pil_img)
+        morph_frames.append(to_pil_image(img_tensor.squeeze(0).cpu()))
 
-    pil_frames[0].save(
+    # Hold the start car, transition, then hold the final full car
+    if loop == 0:
+        # Smooth ping-pong with holds at each end
+        all_frames = (
+            [morph_frames[0]] * hold_frames
+            + morph_frames
+            + [morph_frames[-1]] * hold_frames
+            + list(reversed(morph_frames))
+        )
+    else:
+        # Play once and freeze on the final car
+        all_frames = (
+            [morph_frames[0]] * hold_frames
+            + morph_frames
+            + [morph_frames[-1]] * (hold_frames * 2)
+        )
+
+    all_frames[0].save(
         save_path,
         save_all=True,
-        append_images=pil_frames[1:],
+        append_images=all_frames[1:],
         duration=70,
-        loop=0
+        loop=loop
     )
     print(f"Saved morph animation to: {save_path}")
+
+
+@torch.no_grad()
+def generate_denoise_gif(
+    model: nn.Module,
+    diffusion: GaussianDiffusion,
+    ddim_steps: int = 50,
+    hold_frames: int = 30,
+    loop: int = 0,
+    save_path: str = "car_generation.gif",
+    device: torch.device = None
+):
+    device = device or next(model.parameters()).device
+    x = torch.randn(1, 3, 64, 64, device=device)
+
+    times = torch.linspace(0, diffusion.timesteps - 1, ddim_steps + 1, dtype=torch.long).to(device)
+    time_pairs = list(zip(times[:-1], times[1:]))
+
+    frames = []
+    print(f"Generating denoising animation ({ddim_steps} steps)...")
+    for prev_t_val, t_val in tqdm(reversed(time_pairs), desc="Denoising", total=len(time_pairs)):
+        t = torch.full((1,), t_val, device=device, dtype=torch.long)
+        eps = model(x, t)
+
+        alpha_cumprod_t = diffusion.alphas_cumprod[t_val]
+        alpha_cumprod_prev = diffusion.alphas_cumprod[prev_t_val] if prev_t_val >= 0 else torch.tensor(1.0, device=device)
+
+        pred_x0 = (x - torch.sqrt(1.0 - alpha_cumprod_t) * eps) / torch.sqrt(alpha_cumprod_t)
+        pred_x0 = pred_x0.clamp(-1.0, 1.0)
+
+        dir_xt = torch.sqrt(1.0 - alpha_cumprod_prev) * eps
+        x = torch.sqrt(alpha_cumprod_prev) * pred_x0 + dir_xt
+
+        current = (pred_x0 * 0.5 + 0.5).clamp(0.0, 1.0)
+        frames.append(to_pil_image(current.squeeze(0).cpu()))
+
+    final_img = to_pil_image((x * 0.5 + 0.5).clamp(0.0, 1.0).squeeze(0).cpu())
+    all_frames = frames + [final_img] * hold_frames
+
+    all_frames[0].save(
+        save_path,
+        save_all=True,
+        append_images=all_frames[1:],
+        duration=60,
+        loop=loop
+    )
+    print(f"Saved generation animation to: {save_path}")
+
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str, default="./checkpoints/latest.pt")
+    parser.add_argument("--mode", type=str, default="morph", choices=["morph", "denoise"],
+                        help="'morph' interpolates between two cars; 'denoise' shows noise turning into a car.")
     parser.add_argument("--frames", type=int, default=30)
     parser.add_argument("--steps", type=int, default=50)
-    parser.add_argument("--output", type=str, default="car_morph.gif")
+    parser.add_argument("--hold", type=int, default=20, help="Frames to hold/pause on the finished car.")
+    parser.add_argument("--loop", type=int, default=0, help="0 to loop indefinitely with pauses; 1 to play once and stop.")
+    parser.add_argument("--output", type=str, default=None)
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -110,19 +178,37 @@ def main():
 
     if os.path.exists(args.checkpoint):
         ckpt = torch.load(args.checkpoint, map_location=device)
-        model.load_state_dict(ckpt["model"])
-        print(f"Loaded trained weights from {args.checkpoint}")
+        key = "ema" if "ema" in ckpt else "model"
+        model.load_state_dict(ckpt[key])
+        print(f"Loaded {key} weights from {args.checkpoint}")
     else:
         print(f"No checkpoint found at {args.checkpoint}, running demo on initialized weights.")
 
-    generate_morph_gif(
-        model=model,
-        diffusion=diffusion,
-        frames=args.frames,
-        ddim_steps=args.steps,
-        save_path=args.output,
-        device=device
-    )
+    os.makedirs("progress", exist_ok=True)
+
+    if args.mode == "denoise":
+        out_path = args.output or "progress/car_generation.gif"
+        generate_denoise_gif(
+            model=model,
+            diffusion=diffusion,
+            ddim_steps=args.steps,
+            hold_frames=args.hold,
+            loop=args.loop,
+            save_path=out_path,
+            device=device
+        )
+    else:
+        out_path = args.output or "progress/car_morph.gif"
+        generate_morph_gif(
+            model=model,
+            diffusion=diffusion,
+            frames=args.frames,
+            ddim_steps=args.steps,
+            hold_frames=args.hold,
+            loop=args.loop,
+            save_path=out_path,
+            device=device
+        )
 
 if __name__ == "__main__":
     main()

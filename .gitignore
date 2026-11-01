@@ -8,13 +8,15 @@ cars_test/
 *.tar.gz
 *.zip
 
-# PyTorch checkpoints and training artifacts
+# PyTorch checkpoints (Weight files are ~667 MB each; GitHub limit is 100 MB)
 *.pt
 *.pth
 *.ckpt
-checkpoints/
+checkpoints/*
+!checkpoints/loss_log.csv
 runs/
 logs/
+samples/
 
 # Python cache & virtual environments
 __pycache__/
@@ -24,9 +26,15 @@ __pycache__/
 env/
 venv/
 ENV/
+*.egg-info/
+dist/
+build/
 
-# OS / Editor files
+# OS / Editor / Runtime files
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+*.tmp
+*.log
+.matplotlib/
