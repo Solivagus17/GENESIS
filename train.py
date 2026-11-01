@@ -33,9 +33,12 @@ def gpu_stats() -> dict:
         "power_w"      : round(power, 1),
     }
 
+from torchvision.utils import save_image
+
 from data import get_dataloader
 from model import get_model
 from diffusion import GaussianDiffusion
+from sample import ddim_sample
 
 
 class EMA:
@@ -165,6 +168,13 @@ def train(args):
             torch.save(checkpoint, path)
             print(f"Saved checkpoint → {path}")
 
+        if (epoch + 1) % args.sample_every == 0 or epoch == 0:
+            os.makedirs(args.sample_dir, exist_ok=True)
+            samples = ddim_sample(ema.shadow, diffusion, n_samples=16, ddim_steps=50, device=device)
+            preview_path = os.path.join(args.sample_dir, f"epochs001-{epoch+1:03d}.png")
+            save_image(samples, preview_path, nrow=4, padding=2)
+            print(f"Saved preview → {preview_path}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -177,6 +187,8 @@ if __name__ == "__main__":
     parser.add_argument("--schedule",       type=str,   default="cosine", choices=["cosine", "linear"])
     parser.add_argument("--ema_decay",      type=float, default=0.9999)
     parser.add_argument("--save_every",     type=int,   default=25)
+    parser.add_argument("--sample_every",   type=int,   default=10)
+    parser.add_argument("--sample_dir",     type=str,   default="./progress")
     parser.add_argument("--checkpoint_dir", type=str,   default="./checkpoints")
     parser.add_argument("--num_workers",    type=int,   default=2)
     parser.add_argument("--compile",        action="store_true")

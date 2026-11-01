@@ -159,22 +159,25 @@ def main():
     parser.add_argument("--method", type=str, default="ddim", choices=["ddim", "ddpm"])
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--samples", type=int, default=16)
-    parser.add_argument("--output", type=str, default="generated_cars.png")
+    parser.add_argument("--output", type=str, default=None)
+    parser.add_argument("--output_dir", type=str, default="./progress")
     parser.add_argument("--dataset", type=str, default="stanford_cars")
     parser.add_argument("--eval_fid", action="store_true")
     parser.add_argument("--fid_samples", type=int, default=500)
-    parser.add_argument("--use_ema", action="store_true")
+    parser.add_argument("--use_ema", action="store_true", default=True)
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = get_model(device=device)
     diffusion = GaussianDiffusion(timesteps=1000, schedule="cosine", device=device)
 
+    epoch = 0
     if os.path.exists(args.checkpoint):
         ckpt = torch.load(args.checkpoint, map_location=device)
         key = "ema" if (args.use_ema and "ema" in ckpt) else "model"
         model.load_state_dict(ckpt[key])
-        print(f"Loaded {key} weights from {args.checkpoint}")
+        epoch = ckpt.get("epoch", 0) + 1
+        print(f"Loaded {key} weights from {args.checkpoint} (epoch {epoch})")
     else:
         print(f"No checkpoint found at {args.checkpoint}, using initialized weights.")
 
@@ -183,9 +186,12 @@ def main():
     else:
         samples = ddpm_sample(model, diffusion, n_samples=args.samples, device=device)
 
+    os.makedirs(args.output_dir, exist_ok=True)
+    out_path = args.output if args.output else os.path.join(args.output_dir, f"epochs001-{epoch:03d}.png")
+
     nrow = int(np.sqrt(args.samples))
-    save_image(samples, args.output, nrow=nrow, padding=2)
-    print(f"Saved {args.samples} cars to {args.output}")
+    save_image(samples, out_path, nrow=nrow, padding=2)
+    print(f"Saved {args.samples} cars to {out_path}")
 
     if args.eval_fid:
         score = evaluate_fid(model, diffusion, dataset_key=args.dataset, num_samples=args.fid_samples)
