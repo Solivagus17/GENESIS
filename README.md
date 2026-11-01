@@ -37,11 +37,11 @@
 <table align="center" width="100%">
 <tr>
 <td width="50%" align="center">
-<b>50-Step DDIM Reverse Denoising ($\mathbf{x}_T \rightarrow \mathbf{x}_0$)</b>
+<b>50-Step DDIM Reverse Denoising (x_T &rarr; x_0)</b>
 <br><br>
 <img src="progress/car_generation.gif" width="100%" alt="DDIM Denoising Animation"/>
 <br>
-<em>Trajectory of estimated $\hat{\mathbf{x}}_0$ across 50 accelerated implicit sampling timesteps.</em>
+<em>Trajectory of estimated clean image across 50 accelerated implicit sampling timesteps.</em>
 </td>
 <td width="50%" align="center">
 <b>Latent Spherical Linear Interpolation (SLERP)</b>
@@ -57,11 +57,11 @@
 
 <div align="center">
 
-### Forward Diffusion Process $q(\mathbf{x}_t \mid \mathbf{x}_0)$
+### Forward Diffusion Process: q(x_t | x_0)
 
 ![Forward Diffusion](forward_diffusion.png)
 
-*Stepwise Gaussian noise corruption across $T=1000$ steps using the Nichol & Dhariwal cosine $\beta$-schedule.*
+*Stepwise Gaussian noise corruption across T = 1000 steps using the Nichol & Dhariwal cosine schedule.*
 
 </div>
 
@@ -179,22 +179,50 @@ flowchart LR
 ```
 
 ### 1. Forward Noising Process
-The forward marginal distribution at any arbitrary timestep $t \in [1, T]$ can be sampled in closed form:
-$$q(\mathbf{x}_t \mid \mathbf{x}_0) = \mathcal{N}\left(\mathbf{x}_t;\, \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0,\; (1 - \bar{\alpha}_t)\mathbf{I}\right)$$
-$$\mathbf{x}_t = \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0 + \sqrt{1 - \bar{\alpha}_t}\,\boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$$
 
-Where $\alpha_t = 1 - \beta_t$ and $\bar{\alpha}_t = \prod_{s=1}^t \alpha_s$. We employ the cosine cumulative product schedule:
-$$\bar{\alpha}_t = \frac{f(t)}{f(0)}, \quad f(t) = \cos\left(\frac{t/T + s}{1 + s} \cdot \frac{\pi}{2}\right)^2, \quad s = 0.008$$
+Given a clean input image $\mathbf{x}_0$, the forward Markov chain progressively corrupts the structure by adding Gaussian noise over $T = 1000$ discrete timesteps:
+
+$$
+q(\mathbf{x}_t \mid \mathbf{x}_{t-1}) = \mathcal{N}\left(\mathbf{x}_t;\, \sqrt{1 - \beta_t}\,\mathbf{x}_{t-1},\; \beta_t\mathbf{I}\right)
+$$
+
+By defining $\alpha_t = 1 - \beta_t$ and $\bar{\alpha}_t = \prod_{s=1}^t \alpha_s$, the forward marginal distribution can be computed directly in closed form without recursive sampling:
+
+$$
+q(\mathbf{x}_t \mid \mathbf{x}_0) = \mathcal{N}\left(\mathbf{x}_t;\, \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0,\; (1 - \bar{\alpha}_t)\mathbf{I}\right)
+$$
+
+$$
+\mathbf{x}_t = \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0 + \sqrt{1 - \bar{\alpha}_t}\,\boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I})
+$$
+
+We adopt the **cosine variance schedule** (Nichol & Dhariwal, 2021) with offset $s = 0.008$ to preserve structural information longer across intermediate timesteps:
+
+$$
+\bar{\alpha}_t = \frac{f(t)}{f(0)}, \quad f(t) = \cos\left(\frac{t/T + s}{1 + s} \cdot \frac{\pi}{2}\right)^2
+$$
 
 ### 2. Optimization Objective
-The network $\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)$ parameterizes the noise prediction using mean squared error:
-$$\mathcal{L}_{\text{simple}}(\theta) = \mathbb{E}_{t, \mathbf{x}_0, \boldsymbol{\epsilon}}\left[\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)\|^2\right]$$
+
+Rather than predicting the clean image $\mathbf{x}_0$ directly, the neural network $\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)$ is parameterized to estimate the random noise vector $\boldsymbol{\epsilon}$ added to the latent at timestep $t$. The loss is the mean squared error (MSE):
+
+$$
+\mathcal{L}_{\text{simple}}(\theta) = \mathbb{E}_{t, \mathbf{x}_0, \boldsymbol{\epsilon}}\left[\left\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)\right\|^2\right]
+$$
 
 ### 3. Accelerated DDIM Reverse Step
-Non-Markovian deterministic sampling ($\eta = 0$) allows stepping directly from $t$ to $t-\tau$:
-$$\hat{\mathbf{x}}_0 = \frac{\mathbf{x}_t - \sqrt{1 - \bar{\alpha}_t}\,\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)}{\sqrt{\bar{\alpha}_t}}$$
-$$\mathbf{x}_{t-\tau} = \sqrt{\bar{\alpha}_{t-\tau}}\,\hat{\mathbf{x}}_0 + \sqrt{1 - \bar{\alpha}_{t-\tau} - \sigma_t^2}\,\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t) + \sigma_t \boldsymbol{\epsilon}_t$$
-Setting $\sigma_t = 0$ yields a deterministic ordinary differential equation (ODE) trajectory.
+
+While standard DDPM sampling requires running all $T = 1000$ sequential stochastic transitions, Denoising Diffusion Implicit Models (Song et al.) generalize the reverse process to non-Markovian inference. 
+
+Setting the stochasticity parameter $\sigma_t = 0$ yields a deterministic ordinary differential equation (ODE) trajectory that can be integrated over a sub-sequence of 50 timesteps:
+
+$$
+\hat{\mathbf{x}}_0 = \frac{\mathbf{x}_t - \sqrt{1 - \bar{\alpha}_t}\,\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)}{\sqrt{\bar{\alpha}_t}}
+$$
+
+$$
+\mathbf{x}_{t-1} = \sqrt{\bar{\alpha}_{t-1}}\,\hat{\mathbf{x}}_0 + \sqrt{1 - \bar{\alpha}_{t-1}}\,\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)
+$$
 
 ---
 
@@ -217,7 +245,7 @@ The complete 200-epoch training sequence was executed on a single laptop worksta
 | **Minimum Recorded Loss** | **0.0338** (Epoch 198, **-57.6% relative drop**) |
 | **Total Wall-Clock Time** | 35,214 seconds (~9.78 hours) |
 | **Mean Iteration Speed** | 176.1 seconds / epoch |
-| **Allocated GPU Memory** | 5.48 GB initial $\rightarrow$ 5.80 GB steady (out of 7.96 GB VRAM) |
+| **Allocated GPU Memory** | 5.48 GB initial &rarr; 5.80 GB steady (out of 7.96 GB VRAM) |
 | **Peak GPU Operating Temp** | 79°C |
 | **Steady Power Draw** | 36.9W – 50.2W |
 
