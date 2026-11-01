@@ -1,5 +1,9 @@
 # Datasets & Downloads (Must not be pushed to GitHub)
 data/
+stanford-cars/
+stanford-cars*
+cars_train/
+cars_test/
 *.tgz
 *.tar.gz
 *.zip

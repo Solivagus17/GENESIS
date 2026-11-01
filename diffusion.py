@@ -98,7 +98,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     diffusion = GaussianDiffusion(timesteps=1000, schedule="cosine", device=device)
 
-    loader = get_dataloader(dataset_key="cifar10", batch_size=1)
+    loader = get_dataloader(dataset_key="stanford_cars", batch_size=1)
     sample_car = next(iter(loader))[0].to(device)
 
     save_forward_visualization(diffusion, sample_car, save_path="forward_diffusion.png")

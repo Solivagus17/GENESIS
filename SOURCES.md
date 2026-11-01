@@ -7,10 +7,6 @@
   https://ai.stanford.edu/~jkrause/cars/car_dataset.html  
   Mirror: https://s3.amazonaws.com/fast-ai-imageclas/stanford-cars.tgz
 
-* **CIFAR-10**  
-  Alex Krizhevsky, Vinod Nair, Geoffrey Hinton  
-  https://www.cs.toronto.edu/~kriz/cifar.html  
-  Mirror: https://s3.amazonaws.com/fast-ai-imageclas/cifar10.tgz
 
 ## Papers
 

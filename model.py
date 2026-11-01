@@ -177,15 +177,20 @@ class UNet(nn.Module):
 
         return self.final_conv(self.out_act(self.out_norm(h)))
 
-def get_model(device: torch.device = None) -> UNet:
+def get_model(image_size: int = 64, device: torch.device = None) -> UNet:
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Attention at the two smallest spatial resolutions
+    # 64px → (16, 8) | 128px → (32, 16)
+    attn_resolutions = (image_size // 4, image_size // 8)
+
     model = UNet(
         in_channels=3,
         out_channels=3,
         base_channels=96,
         channel_mults=(1, 2, 2, 4),
-        attn_resolutions=(16, 8),
+        attn_resolutions=attn_resolutions,
         num_res_blocks=2
     ).to(device)
     return model

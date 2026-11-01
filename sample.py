@@ -114,7 +114,7 @@ def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
     return diff.dot(diff) + np.trace(sigma1) + np.trace(sigma2) - 2 * tr_covmean
 
 @torch.no_grad()
-def evaluate_fid(model: nn.Module, diffusion: GaussianDiffusion, dataset_key: str = "cifar10", num_samples: int = 500, batch_size: int = 50) -> float:
+def evaluate_fid(model: nn.Module, diffusion: GaussianDiffusion, dataset_key: str = "stanford_cars", num_samples: int = 500, batch_size: int = 50) -> float:
     device = next(model.parameters()).device
     extractor = InceptionFeatureExtractor(device)
     loader = get_dataloader(dataset_key=dataset_key, batch_size=batch_size)
@@ -160,7 +160,7 @@ def main():
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--samples", type=int, default=16)
     parser.add_argument("--output", type=str, default="generated_cars.png")
-    parser.add_argument("--dataset", type=str, default="cifar10")
+    parser.add_argument("--dataset", type=str, default="stanford_cars")
     parser.add_argument("--eval_fid", action="store_true")
     parser.add_argument("--fid_samples", type=int, default=500)
     parser.add_argument("--use_ema", action="store_true")

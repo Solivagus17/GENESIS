@@ -25,17 +25,6 @@ DATASET_CONFIGS = {
         "official_url": "https://ai.stanford.edu/~jkrause/cars/car_dataset.html",
         "total_images": 16185,
         "resolution": "~700x500"
-    },
-    "cifar10": {
-        "name": "CIFAR-10 (Automobile Class)",
-        "url": "https://s3.amazonaws.com/fast-ai-imageclas/cifar10.tgz",
-        "archive_name": "cifar10.tgz",
-        "extract_folder": "cifar10",
-        "image_subdirs": ["train/automobile", "test/automobile"],
-        "license": "MIT License",
-        "official_url": "https://www.cs.toronto.edu/~kriz/cifar.html",
-        "total_images": 6000,
-        "resolution": "32x32 RGB"
     }
 }
 
@@ -71,11 +60,7 @@ def download_dataset(dataset_key: str, data_dir: str = "./data") -> Path:
 
         print(f"Extracting {archive_path.name} to {data_path}...")
         with tarfile.open(archive_path, "r:gz") as tar:
-            if dataset_key == "cifar10":
-                members = [m for m in tar.getmembers() if "automobile" in m.name]
-                tar.extractall(path=data_path, members=members)
-            else:
-                tar.extractall(path=data_path)
+            tar.extractall(path=data_path)
     return extract_path
 
 class CarDataset(Dataset):
@@ -159,7 +144,7 @@ def save_sample_batch(batch_tensor: torch.Tensor, save_path: str = "sample_batch
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, default="stanford_cars", choices=["stanford_cars", "cifar10"])
+    parser.add_argument("--dataset", type=str, default="stanford_cars")
     parser.add_argument("--batch_size", type=int, default=64)
     args = parser.parse_args()
 
