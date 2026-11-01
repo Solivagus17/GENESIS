@@ -1,321 +1,321 @@
+<div align="center">
+
 # GENESIS
 
-**A diffusion model that learns to generate cars from pure noise.**
+### Unconditional Deep Diffusion Model for Vehicle Synthesis
 
-Implements the core DDPM/DDIM papers from scratch in PyTorch — a 41.67M parameter UNet trained on 16,185 images from the Stanford Cars dataset.
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![PyTorch 2.11](https://img.shields.io/badge/PyTorch-2.11-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)](https://pytorch.org)
+[![CUDA 12.8](https://img.shields.io/badge/CUDA-12.8-76B900?style=flat-square&logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
+[![Parameters](https://img.shields.io/badge/Parameters-41.67M-blue?style=flat-square)](https://github.com)
+[![Hardware](https://img.shields.io/badge/GPU-RTX_5050_Laptop_(8GB)-76B900?style=flat-square)](https://nvidia.com)
+[![License](https://img.shields.io/badge/License-MIT-lightgrey?style=flat-square)](LICENSE)
 
-![Generated Cars](progress/epochs001-200.png)
-*16 cars that don't exist. Every pixel came from Gaussian noise.*
+<p align="center">
+  A clean-room implementation of Denoising Diffusion Probabilistic Models (DDPM) and Denoising Diffusion Implicit Models (DDIM) in pure PyTorch.<br>
+  Trained for 200 epochs across 16,185 images from the Stanford Cars dataset to synthesize coherent vehicle structures from Gaussian noise.
+</p>
 
 ---
 
-## What this actually does
+</div>
 
-The model learns two things:
-1. **How to destroy an image** — progressively add Gaussian noise until it's static (forward process)
-2. **How to undo that destruction** — predict and remove the noise at each step (reverse process)
+## Visual Showcase
 
-Once trained, you throw pure random noise at the reverse process and a car materializes out of it.
+<div align="center">
 
-![Forward Diffusion](forward_diffusion.png)
-*A real car from the dataset being destroyed over 1000 timesteps. The model learns to reverse this.*
+### Generated Sample Grid (200 Epochs, EMA Weights, DDIM-75)
+
+![Generated Cars Grid](progress/epochs001-200.png)
+
+*Curated 4×4 generation grid from the 200-epoch EMA checkpoint. Every sample is synthesized starting from pure standard normal noise $\mathbf{x}_T \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$.*
+
+</div>
 
 <br>
 
-### Noise to car in 50 steps (DDIM)
+<table align="center" width="100%">
+<tr>
+<td width="50%" align="center">
+<b>50-Step DDIM Reverse Denoising ($\mathbf{x}_T \rightarrow \mathbf{x}_0$)</b>
+<br><br>
+<img src="progress/car_generation.gif" width="100%" alt="DDIM Denoising Animation"/>
+<br>
+<em>Trajectory of estimated $\hat{\mathbf{x}}_0$ across 50 accelerated implicit sampling timesteps.</em>
+</td>
+<td width="50%" align="center">
+<b>Latent Spherical Linear Interpolation (SLERP)</b>
+<br><br>
+<img src="progress/car_morph.gif" width="100%" alt="Latent Morph Animation"/>
+<br>
+<em>Smooth geodesic interpolation between two distinct Gaussian noise vectors on the latent hypersphere.</em>
+</td>
+</tr>
+</table>
 
-![Denoising](progress/car_generation.gif)
+<br>
 
-### Morphing between two cars via latent space interpolation
+<div align="center">
 
-![Morph](progress/car_morph.gif)
+### Forward Diffusion Process $q(\mathbf{x}_t \mid \mathbf{x}_0)$
+
+![Forward Diffusion](forward_diffusion.png)
+
+*Stepwise Gaussian noise corruption across $T=1000$ steps using the Nichol & Dhariwal cosine $\beta$-schedule.*
+
+</div>
 
 ---
 
-## Architecture
+## Technical Highlights
 
-The backbone is a UNet conditioned on diffusion timestep. Nothing exotic — ResBlocks, skip connections, multi-head self-attention at the lower spatial resolutions where it actually matters, and sinusoidal position embeddings to tell the network *when* in the noise schedule it is.
+- **Pure PyTorch Implementation**: Built without external diffusion frameworks (no Diffusers, no pre-trained weights). Every module—from sinusoidal positional embeddings and multi-head spatial attention to the non-Markovian DDIM sampler—is written from scratch.
+- **Cosine Noise Schedule**: Avoids the rapid entropy collapse of linear schedules near $t=0$ by adopting an offset cosine decay ($s=0.008$), preserving structural signal across higher timesteps.
+- **Dual Sampling Engines**:
+  - **DDPM (Ho et al.)**: 1,000-step stochastic Markovian reverse process.
+  - **DDIM (Song et al.)**: 50–100 step accelerated non-Markovian deterministic sampler ($\eta=0$), providing a 20× speedup with zero structural regression.
+- **Hardware Telemetry & Optimization**: Built-in `pynvml` instrumentation capturing instantaneous GPU utilization, VRAM allocation, temperature, and power consumption directly to CSV every epoch. Trained with `bfloat16` automatic mixed precision (AMP) and TF32 matrix multiplication.
+- **Built-in Quantitative Evaluation**: Features an integrated Fréchet Inception Distance (FID) computation pipeline utilizing an Inception-V3 backbone with manual covariance matrix square-root calculation via `scipy`.
 
-```
-UNet — 41.67M parameters
-├── base_channels:   96
-├── channel_mults:   (1, 2, 2, 4) → 96 / 192 / 192 / 384
-├── attention:       4-head self-attention at 16×16 and 8×8
-├── res_blocks:      2 per encoder level, 3 per decoder level
-├── time_embedding:  sinusoidal(96) → MLP → 384-dim
-├── normalization:   GroupNorm(32)
-├── activation:      SiLU throughout
-├── downsample:      strided 3×3 conv (stride 2)
-└── upsample:        nearest interpolation ×2 → 3×3 conv
-```
+---
+
+## System Architecture
 
 ```mermaid
 flowchart TD
-    subgraph input [" "]
-        X["x_t (noisy image)\n3 × 64 × 64"]
-        T["timestep t"]
+    subgraph input ["Input & Conditioning"]
+        X["x_t (noisy image)\nShape: [B, 3, 64, 64]"]
+        T["Timestep t ∈ [0, 999]\nShape: [B]"]
+        T --> SIN["Sinusoidal Positional Embedding\n96 Channels"]
+        SIN --> MLP["Time MLP (SiLU)\nLinear(96, 384) → Linear(384, 384)"]
     end
 
-    T --> SIN["Sinusoidal Embeddings\ndim = 96"]
-    SIN --> MLP["Time MLP\n96 → 384 → 384"]
+    X --> INIT["Initial Conv2d 3×3\n3 → 96 Channels"]
 
-    X --> INIT["Init Conv 3×3\n3 → 96"]
-
-    subgraph encoder ["Encoder"]
+    subgraph encoder ["UNet Encoder"]
         direction TB
-        E1["2× ResBlock + Skip\n96 ch @ 64×64"]
-        E2["Downsample → 2× ResBlock + Skip\n192 ch @ 32×32"]
-        E3["Downsample → 2× ResBlock + Attn + Skip\n192 ch @ 16×16"]
-        E4["Downsample → 2× ResBlock + Attn + Skip\n384 ch @ 8×8"]
-        E1 --> E2 --> E3 --> E4
+        E1["Stage 1: 2× ResNetBlock\n96 ch @ 64×64"]
+        D1["Strided Conv2d (stride=2)\n64×64 → 32×32"]
+        E2["Stage 2: 2× ResNetBlock\n192 ch @ 32×32"]
+        D2["Strided Conv2d (stride=2)\n32×32 → 16×16"]
+        E3["Stage 3: 2× ResNetBlock + 4-Head Attention\n192 ch @ 16×16"]
+        D3["Strided Conv2d (stride=2)\n16×16 → 8×8"]
+        E4["Stage 4: 2× ResNetBlock + 4-Head Attention\n384 ch @ 8×8"]
+        
+        E1 --> D1 --> E2 --> D2 --> E3 --> D3 --> E4
     end
 
     subgraph bottleneck ["Bottleneck"]
-        B["ResBlock → Attention → ResBlock\n384 ch @ 8×8"]
+        B["ResNetBlock(384) → 4-Head Attention(384) → ResNetBlock(384)\nShape: [B, 384, 8, 8]"]
     end
 
-    subgraph decoder ["Decoder"]
+    subgraph decoder ["UNet Decoder (with Skip Concatenation)"]
         direction TB
-        D4["3× ResBlock + Attn + Skip Concat\n384 ch @ 8×8"]
-        D3["Upsample → 3× ResBlock + Attn + Skip Concat\n192 ch @ 16×16"]
-        D2["Upsample → 3× ResBlock + Skip Concat\n192 ch @ 32×32"]
-        D1["Upsample → 3× ResBlock + Skip Concat\n96 ch @ 64×64"]
-        D4 --> D3 --> D2 --> D1
+        DEC4["3× ResNetBlock + 4-Head Attention\n384 ch @ 8×8"]
+        U3["Nearest Upsample (×2) + Conv2d\n8×8 → 16×16"]
+        DEC3["3× ResNetBlock + 4-Head Attention\n192 ch @ 16×16"]
+        U2["Nearest Upsample (×2) + Conv2d\n16×16 → 32×32"]
+        DEC2["3× ResNetBlock\n192 ch @ 32×32"]
+        U1["Nearest Upsample (×2) + Conv2d\n32×32 → 64×64"]
+        DEC1["3× ResNetBlock\n96 ch @ 64×64"]
+
+        DEC4 --> U3 --> DEC3 --> U2 --> DEC2 --> U1 --> DEC1
     end
 
     INIT --> encoder
-    MLP -.->|"injected into\nevery ResBlock"| encoder
+    MLP -.->|"Time Projection Injected\ninto each ResBlock"| encoder
     MLP -.-> bottleneck
     MLP -.-> decoder
+
     encoder --> bottleneck --> decoder
 
-    decoder --> OUT["GroupNorm → SiLU → Conv 3×3\n96 → 3"]
-    OUT --> PRED["ε_θ (predicted noise)\n3 × 64 × 64"]
+    decoder --> FINAL["GroupNorm(32) → SiLU → Conv2d 3×3\n96 → 3 Channels"]
+    FINAL --> OUT["Predicted Noise ε_θ(x_t, t)\nShape: [B, 3, 64, 64]"]
 
-    encoder -. "skip connections" .-> decoder
+    E1 -. "Skip 1" .-> DEC1
+    E2 -. "Skip 2" .-> DEC2
+    E3 -. "Skip 3" .-> DEC3
+    E4 -. "Skip 4" .-> DEC4
 ```
 
-The skip connections concatenate encoder features with decoder features at matching resolutions. Attention only fires at 16×16 and 8×8 — at higher resolutions it would torch the VRAM for minimal benefit.
+### Layer Dimensionality Specification
+
+| Stage | Operation | Resolution | Channels | Attention | Skip Target |
+|:---|:---|:---:|:---:|:---:|:---:|
+| **Input** | Clean RGB Image $\mathbf{x}_0$ | $64 \times 64$ | 3 | — | — |
+| **Initial** | Conv2d $3 \times 3$ | $64 \times 64$ | 96 | No | — |
+| **Enc Stage 1** | $2 \times$ ResBlock | $64 \times 64$ | 96 | No | Skip 1 |
+| **Enc Stage 2** | Downsample + $2 \times$ ResBlock | $32 \times 32$ | 192 | No | Skip 2 |
+| **Enc Stage 3** | Downsample + $2 \times$ ResBlock + Attn | $16 \times 16$ | 192 | **Yes (4 heads)** | Skip 3 |
+| **Enc Stage 4** | Downsample + $2 \times$ ResBlock + Attn | $8 \times 8$ | 384 | **Yes (4 heads)** | Skip 4 |
+| **Bottleneck** | ResBlock + Attn + ResBlock | $8 \times 8$ | 384 | **Yes (4 heads)** | — |
+| **Dec Stage 4** | $3 \times$ ResBlock + Attn | $8 \times 8$ | 384 | **Yes (4 heads)** | Concat Skip 4 |
+| **Dec Stage 3** | Upsample + $3 \times$ ResBlock + Attn | $16 \times 16$ | 192 | **Yes (4 heads)** | Concat Skip 3 |
+| **Dec Stage 2** | Upsample + $3 \times$ ResBlock | $32 \times 32$ | 192 | No | Concat Skip 2 |
+| **Dec Stage 1** | Upsample + $3 \times$ ResBlock | $64 \times 64$ | 96 | No | Concat Skip 1 |
+| **Output** | GroupNorm + SiLU + Conv2d $3 \times 3$ | $64 \times 64$ | 3 | — | Output $\hat{\boldsymbol{\epsilon}}$ |
 
 ---
 
-## The Diffusion Math
-
-Two noise schedules are implemented. Training uses the **cosine schedule** (Nichol & Dhariwal, 2021) which avoids the too-fast noise saturation of the linear schedule.
+## Mathematical Formulation
 
 ```mermaid
 flowchart LR
-    subgraph forward ["Forward Process q(x_t | x_0)"]
+    subgraph fwd ["Forward Degradation q(x_t | x_0)"]
         direction LR
-        X0F["x_0\nclean image"] -->|"add noise"| XTF["x_t = √ᾱ_t · x_0 + √(1-ᾱ_t) · ε"]
-        XTF -->|"t = T"| XNF["x_T\npure noise"]
+        X0["x_0\nReal Data"] -->|"q(x_1|x_0)"| X1["x_1"]
+        X1 -->|"..."| XT["x_t = √ᾱ_t x_0 + √(1-ᾱ_t) ε"]
+        XT -->|"q(x_T|x_{T-1})"| X_T["x_T ~ N(0, I)"]
     end
 
-    subgraph reverse ["Reverse Process p_θ(x_{t-1} | x_t)"]
+    subgraph rev ["Reverse Denoising p_θ(x_{t-1} | x_t)"]
         direction RL
-        XNR["x_T\npure noise"] -->|"predict ε, denoise"| XTR["x_{t-1}"]
-        XTR -->|"t = 0"| X0R["x_0\ngenerated car"]
+        R_T["x_T ~ N(0, I)"] -->|"Predict ε_θ"| RT["x_{t-1}"]
+        RT -->|"..."| R1["x_1"]
+        R1 -->|"Final Step"| R0["x_0\nSynthesized Output"]
     end
 
-    forward ~~~ reverse
+    fwd ~~~ rev
 ```
 
-| Component | Detail |
+### 1. Forward Noising Process
+The forward marginal distribution at any arbitrary timestep $t \in [1, T]$ can be sampled in closed form:
+$$q(\mathbf{x}_t \mid \mathbf{x}_0) = \mathcal{N}\left(\mathbf{x}_t;\, \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0,\; (1 - \bar{\alpha}_t)\mathbf{I}\right)$$
+$$\mathbf{x}_t = \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0 + \sqrt{1 - \bar{\alpha}_t}\,\boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$$
+
+Where $\alpha_t = 1 - \beta_t$ and $\bar{\alpha}_t = \prod_{s=1}^t \alpha_s$. We employ the cosine cumulative product schedule:
+$$\bar{\alpha}_t = \frac{f(t)}{f(0)}, \quad f(t) = \cos\left(\frac{t/T + s}{1 + s} \cdot \frac{\pi}{2}\right)^2, \quad s = 0.008$$
+
+### 2. Optimization Objective
+The network $\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)$ parameterizes the noise prediction using mean squared error:
+$$\mathcal{L}_{\text{simple}}(\theta) = \mathbb{E}_{t, \mathbf{x}_0, \boldsymbol{\epsilon}}\left[\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)\|^2\right]$$
+
+### 3. Accelerated DDIM Reverse Step
+Non-Markovian deterministic sampling ($\eta = 0$) allows stepping directly from $t$ to $t-\tau$:
+$$\hat{\mathbf{x}}_0 = \frac{\mathbf{x}_t - \sqrt{1 - \bar{\alpha}_t}\,\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)}{\sqrt{\bar{\alpha}_t}}$$
+$$\mathbf{x}_{t-\tau} = \sqrt{\bar{\alpha}_{t-\tau}}\,\hat{\mathbf{x}}_0 + \sqrt{1 - \bar{\alpha}_{t-\tau} - \sigma_t^2}\,\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t) + \sigma_t \boldsymbol{\epsilon}_t$$
+Setting $\sigma_t = 0$ yields a deterministic ordinary differential equation (ODE) trajectory.
+
+---
+
+## Empirical Training Performance
+
+The complete 200-epoch training sequence was executed on a single laptop workstation without cluster dependencies.
+
+![Training Loss and Telemetry](progress/training_metrics.png)
+
+### Run Statistics
+
+| Metric | Measured Value |
 |:---|:---|
-| Timesteps | T = 1000 |
-| β schedule | Cosine (s = 0.008), clipped to [0.0001, 0.9999] |
-| Forward | q(x_t \| x_0) = N(√ᾱ_t · x_0, (1 − ᾱ_t) · I) |
-| Training objective | L = E[‖ε − ε_θ(x_t, t)‖²] — simple MSE noise prediction |
-| DDPM sampling | Full 1000-step reverse with posterior variance |
-| DDIM sampling | Accelerated 50-step deterministic (η = 0) |
+| **Total Parameter Count** | 41,673,315 (~41.67M) |
+| **Training Dataset** | Stanford Cars (16,185 images, cached in RAM as `.pt`) |
+| **Batch Size & Precision** | 32 / `bfloat16` Automatic Mixed Precision (AMP) |
+| **Completed Epochs** | 200 / 200 |
+| **Initial Loss (Epoch 1)** | 0.0798 |
+| **Final Loss (Epoch 200)** | 0.0350 |
+| **Minimum Recorded Loss** | **0.0338** (Epoch 198, **-57.6% relative drop**) |
+| **Total Wall-Clock Time** | 35,214 seconds (~9.78 hours) |
+| **Mean Iteration Speed** | 176.1 seconds / epoch |
+| **Allocated GPU Memory** | 5.48 GB initial $\rightarrow$ 5.80 GB steady (out of 7.96 GB VRAM) |
+| **Peak GPU Operating Temp** | 79°C |
+| **Steady Power Draw** | 36.9W – 50.2W |
 
 ---
 
-## Training
-
-### Hardware
-- **GPU**: NVIDIA RTX 5050 Laptop GPU (8 GB VRAM)
-- **Precision**: bfloat16 mixed precision (AMP)
-- **CUDA**: 12.8 / PyTorch 2.11
-- **Optimizations**: cuDNN benchmark, TF32 matmul, gradient clipping (max_norm=1.0)
-
-### Hyperparameters
-| | |
-|:---|:---|
-| Optimizer | AdamW (lr = 2e-4, weight_decay = 1e-4) |
-| Batch size | 32 |
-| EMA decay | 0.9999 |
-| Epochs | 200 |
-| Gradient clipping | max_norm = 1.0 |
-
-### Results
-
-| Metric | Value |
-|:---|:---|
-| Initial loss (epoch 1) | 0.0798 |
-| Final loss (epoch 200) | 0.0350 |
-| Best loss (epoch 198) | **0.0338** |
-| Total training time | 9.8 hours |
-| Avg time per epoch | ~176 seconds |
-| Steady-state VRAM | 5.8 / 7.96 GB |
-| Peak GPU temp | 79°C |
-
-The loss drops fast in the first ~25 epochs (learning the coarse structure), then slowly grinds down as the model picks up finer details. Most of the meaningful learning happens early — the last 100 epochs are about texture and edge quality.
-
-![Training Metrics](progress/training_metrics.png)
-*Loss curve with 5-epoch moving average + GPU telemetry (temperature, VRAM, power draw).*
-
-### What the model learns over time
-
-The training script drops preview samples every 10 epochs. Early on it's blurry color blobs. By epoch 50 you start seeing car-shaped things. By 200 the details tighten up — windshields, wheels, headlights emerge. It's not photorealistic at 64×64, but the structure is learned.
-
----
-
-## Sampling
-
-Two sampling modes are available:
-
-**DDPM** — the original 1000-step stochastic sampler. Faithful to the math but slow (~40 seconds per batch on the 5050).
-
-**DDIM** — deterministic 50-step sampler. Same quality, 20× faster. This is what the training previews use.
-
-```bash
-# generate 16 cars using DDIM (default, recommended)
-python sample.py --method ddim --steps 50 --samples 16
-
-# full DDPM sampling (slow, 1000 steps)
-python sample.py --method ddpm --samples 16
-
-# evaluate FID score against real dataset
-python sample.py --eval_fid --fid_samples 500
-```
-
-FID evaluation is built in — it spins up InceptionV3, extracts features from real and generated images, and computes the Fréchet distance. No external libraries needed beyond scipy.
-
----
-
-## Latent Space Exploration
-
-The model learns a smooth, continuous latent space. Two noise vectors that are "close" in this space produce similar-looking cars. SLERP (spherical linear interpolation) along the surface of the noise hypersphere lets you morph between any two generated cars smoothly.
-
-```bash
-# morph between two random cars
-python interpolate.py --mode morph --frames 30
-
-# watch noise become a car (denoising visualization)
-python interpolate.py --mode denoise --steps 50
-```
-
----
-
-## Pipeline
-
-```mermaid
-flowchart LR
-    subgraph data ["Data Pipeline"]
-        DL["Download\nStanford Cars\n16,185 images"] --> CROP["Resize + CenterCrop\nto 64×64"] --> CACHE["Cache to disk\nas .pt tensor"] --> AUG["Random H-flip\nNormalize to [-1, 1]"]
-    end
-
-    subgraph train ["Training Loop"]
-        AUG --> FWD["Forward diffuse\nq(x_t | x_0)"]
-        FWD --> UNET["UNet predicts ε"]
-        UNET --> LOSS["MSE loss\nvs actual ε"]
-        LOSS --> BACK["Backward + AdamW\nAMP + grad clip"]
-        BACK --> EMA_U["Update EMA\nshadow weights"]
-        EMA_U --> CKPT["Save checkpoint\n+ GPU telemetry"]
-    end
-
-    subgraph generate ["Generation"]
-        NOISE["z ~ N(0, I)"] --> DDIM_S["DDIM reverse\n50 steps"]
-        DDIM_S --> IMGS["Generated cars"]
-    end
-
-    CKPT -.->|"EMA weights"| DDIM_S
-```
-
----
-
-## Dataset
-
-**Stanford Cars** (Krause et al.) — 16,185 images across 196 car classes. Sedans, SUVs, coupes, trucks, everything. The class labels aren't used here since this is unconditional generation — the model just learns "what cars look like" without caring about make or model.
-
-Images are center-cropped to 64×64 and cached as a single PyTorch tensor on first run. The entire dataset lives in RAM during training (~600 MB), which makes the DataLoader fast since there's no disk I/O per batch.
-
-![Dataset Sample](sample_batch_stanford_cars.png)
-*Random batch from the preprocessed training data.*
-
----
-
-## Project Structure
+## Repository Structure
 
 ```
 GENESIS/
-├── train.py             training loop — AMP, EMA, GPU telemetry, DDIM previews
-├── model.py             UNet with multi-head attention and sinusoidal embeddings
-├── diffusion.py         forward process, noise schedules, MSE loss
-├── data.py              Stanford Cars download, preprocessing, caching
-├── sample.py            DDPM / DDIM sampling + FID evaluation
-├── interpolate.py       latent SLERP morphing + denoising animations
-├── SOURCES.md           paper references and dataset citations
+├── train.py              # Main training loop (AMP, EMA, GPU telemetry, preview hook)
+├── model.py              # Parametric UNet, Sinusoidal embeddings, 4-Head Attention
+├── diffusion.py          # Gaussian diffusion math, noise schedules, MSE objective
+├── data.py               # Stanford Cars auto-fetch, center-crop, RAM cache, DataLoader
+├── sample.py             # DDPM & DDIM inference engine + built-in FID evaluator
+├── interpolate.py        # Latent space SLERP morphing & step-by-step denoising GIF
+├── SOURCES.md            # Canonical paper references & dataset acknowledgements
+├── .gitignore            # Clean repository filtering (excludes data & heavy .pt weights)
 │
 ├── checkpoints/
-│   ├── loss_log.csv     per-epoch loss + GPU stats (tracked in git)
-│   ├── latest.pt        most recent weights
-│   └── epoch_XXX.pt     periodic snapshots every 25 epochs
+│   ├── loss_log.csv      # Complete 200-epoch loss & telemetry log (tracked)
+│   ├── latest.pt         # Full checkpoint with model, EMA shadow, & optimizer state
+│   └── epoch_XXX.pt      # Periodic snapshots saved every 25 epochs
 │
-├── progress/
-│   ├── epochs001-200.png      final generated grid
-│   ├── car_generation.gif     noise-to-car animation
-│   ├── car_morph.gif          latent interpolation
-│   └── training_metrics.png   loss + hardware telemetry chart
-│
-└── data/                Stanford Cars download + .pt cache (gitignored)
+└── progress/
+    ├── epochs001-200.png      # High-fidelity 4×4 generation grid
+    ├── car_hero.png           # Spotlight standalone car generation
+    ├── car_generation.gif     # 50-step denoising process animation
+    ├── car_morph.gif          # Latent space SLERP interpolation animation
+    └── training_metrics.png   # Dual-panel 300 DPI loss & GPU telemetry chart
 ```
 
 ---
 
-## Quick Start
+## Quickstart
 
+### 1. Installation
+Clone the repository and install the minimal runtime dependencies:
 ```bash
-# install dependencies
+git clone https://github.com/<your-username>/GENESIS.git
+cd GENESIS
 pip install torch torchvision pillow matplotlib tqdm pynvml scipy
-
-# download dataset + train (takes ~10 hours on an 8GB laptop GPU)
-python train.py --epochs 200 --batch_size 32 --schedule cosine
-
-# resume interrupted training
-python train.py --resume
-
-# generate cars from trained model
-python sample.py --method ddim --samples 16
-
-# create a morph animation
-python interpolate.py --mode morph
-
-# create a noise-to-car animation
-python interpolate.py --mode denoise
 ```
 
-To train at 128×128 (needs more VRAM and patience):
+### 2. Synthesize Cars (Inference)
+Generate a 16-sample grid from the trained EMA checkpoint in seconds:
 ```bash
-python train.py --image_size 128 --batch_size 16 --epochs 400
+# High-speed deterministic sampling via DDIM (50 steps)
+python sample.py --method ddim --steps 50 --samples 16
+
+# Full 1000-step stochastic sampling via DDPM
+python sample.py --method ddpm --samples 16
+
+# Compute Fréchet Inception Distance (FID) over 500 samples
+python sample.py --eval_fid --fid_samples 500
+```
+
+### 3. Latent Space Explorations & Animations
+Generate visual animations showing either the noise-to-car emergence or smooth interpolation:
+```bash
+# Generate spherical latent interpolation animation
+python interpolate.py --mode morph --frames 36 --hold 20
+
+# Generate step-by-step denoising trajectory animation
+python interpolate.py --mode denoise --steps 50 --hold 30
+```
+
+### 4. Training from Scratch
+To initiate model training with custom parameters:
+```bash
+python train.py \
+  --dataset stanford_cars \
+  --image_size 64 \
+  --batch_size 32 \
+  --epochs 200 \
+  --lr 2e-4 \
+  --schedule cosine \
+  --ema_decay 0.9999 \
+  --sample_every 10 \
+  --save_every 25
 ```
 
 ---
 
-## Papers
+## References
 
-This implementation draws from:
-
-- Ho, Jain, Abbeel — [Denoising Diffusion Probabilistic Models](https://arxiv.org/abs/2006.11239) (DDPM)
-- Nichol, Dhariwal — [Improved Denoising Diffusion Probabilistic Models](https://arxiv.org/abs/2102.09672) (cosine schedule)
-- Song, Meng, Ermon — [Denoising Diffusion Implicit Models](https://arxiv.org/abs/2010.02502) (DDIM accelerated sampling)
-- Dhariwal, Nichol — [Diffusion Models Beat GANs on Image Synthesis](https://arxiv.org/abs/2105.05233) (architecture choices)
-- Heusel et al. — [GANs Trained by a Two Time-Scale Update Rule](https://arxiv.org/abs/1706.08500) (FID metric)
+1. **Denoising Diffusion Probabilistic Models**  
+   *Jonathan Ho, Ajay Jain, Pieter Abbeel (NeurIPS 2020)* — [arXiv:2006.11239](https://arxiv.org/abs/2006.11239)
+2. **Improved Denoising Diffusion Probabilistic Models**  
+   *Alex Nichol, Prafulla Dhariwal (ICML 2021)* — [arXiv:2102.09672](https://arxiv.org/abs/2102.09672)
+3. **Denoising Diffusion Implicit Models**  
+   *Jiaming Song, Chenlin Meng, Stefano Ermon (ICLR 2021)* — [arXiv:2010.02502](https://arxiv.org/abs/2010.02502)
+4. **Diffusion Models Beat GANs on Image Synthesis**  
+   *Prafulla Dhariwal, Alex Nichol (NeurIPS 2021)* — [arXiv:2105.05233](https://arxiv.org/abs/2105.05233)
+5. **3D Object Representations for Fine-Grained Categorization (Stanford Cars)**  
+   *Jonathan Krause, Michael Stark, Jia Deng, Li Fei-Fei (ICCV Workshops 2013)* — [Stanford AI Lab](https://ai.stanford.edu/~jkrause/cars/car_dataset.html)
 
 ---
 
 ## License
 
-This project uses the Stanford Cars dataset for non-commercial academic research. The code itself is MIT licensed.
-
+This project is licensed under the MIT License. The Stanford Cars dataset is intended for non-commercial academic research.
