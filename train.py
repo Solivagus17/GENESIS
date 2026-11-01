@@ -3,9 +3,12 @@ import csv
 import copy
 import time
 import argparse
+import warnings
 import torch
 import torch.nn as nn
 from tqdm import tqdm
+
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 try:
     import pynvml as nvml
@@ -53,6 +56,10 @@ def train(args):
     use_amp   = device.type == "cuda"
     amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
+    if device.type == "cuda":
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cudnn.benchmark = True
+
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
     log_path = os.path.join(args.checkpoint_dir, "loss_log.csv")
@@ -78,8 +85,12 @@ def train(args):
     scaler    = torch.amp.GradScaler("cuda", enabled=(use_amp and amp_dtype == torch.float16))
 
     if args.compile and hasattr(torch, "compile"):
-        print("Compiling model with torch.compile (~30s warmup on first run)...")
-        model = torch.compile(model)
+        try:
+            import triton
+            print("Compiling model with torch.compile...")
+            model = torch.compile(model)
+        except Exception:
+            print("Note: torch.compile skipped (Triton compiler is not present on Windows). Running high-performance CUDA.")
 
     start_epoch = 0
     if args.resume and os.path.exists(os.path.join(args.checkpoint_dir, "latest.pt")):
